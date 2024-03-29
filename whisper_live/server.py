@@ -5,8 +5,10 @@ import json
 import textwrap
 
 import logging
-logging.basicConfig(level = logging.INFO)
+#logging.basicConfig(level = logging.INFO)
 
+logging.basicConfig(format='%(asctime)s %(filename)s %(lineno)d %(levelname)s %(message)s',
+                            datefmt='%a %d %b %Y %H:%M:%S', level=logging.INFO)
 from websockets.sync.server import serve
 
 import torch
@@ -203,7 +205,8 @@ class ServeClient:
         self.task = task
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.transcriber = WhisperModel(
-            "small" if multilingual else "small.en", 
+            "/home/ccran/fasterwhisper/faster-whisper-large-v3",
+            #"small" if multilingual else "small.en", 
             device=device,
             compute_type="int8" if device=="cpu" else "float16", 
             local_files_only=False,
@@ -342,6 +345,8 @@ class ServeClient:
                     vad_parameters={"threshold": 0.5}
                 )
 
+                result = list(result)
+
                 if self.language is None:
                     if info.language_probability > 0.5:
                         self.language = info.language
@@ -387,6 +392,9 @@ class ServeClient:
                     logging.error(f"[ERROR]: {e}")
 
             except Exception as e:
+
+                import traceback
+                traceback.print_exc()
                 logging.error(f"[ERROR]: {e}")
                 time.sleep(0.01)
     
