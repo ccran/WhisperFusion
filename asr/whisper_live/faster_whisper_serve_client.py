@@ -1,151 +1,14 @@
 import threading
 import json
 import textwrap
-
 import logging
-
-# logging.basicConfig(level = logging.INFO)
 
 logging.basicConfig(format='%(asctime)s %(filename)s %(lineno)d %(levelname)s %(message)s',
                     datefmt='%a %d %b %Y %H:%M:%S', level=logging.INFO)
-from websockets.sync.server import serve
 
-import torch
 import numpy as np
 import time
 from asr.whisper_live.transcriber import WhisperModel
-
-
-class TranscriptionServer:
-    """
-    Represents a transcription server that handles incoming audio from clients.
-
-    Attributes:
-        RATE (int): The audio sampling rate (constant) set to 16000.
-        vad_model (torch.Module): The voice activity detection model.
-        vad_threshold (float): The voice activity detection threshold.
-        clients (dict): A dictionary to store connected clients.
-        websockets (dict): A dictionary to store WebSocket connections.
-        clients_start_time (dict): A dictionary to track client start times.
-        max_clients (int): Maximum allowed connected clients.
-        max_connection_time (int): Maximum allowed connection time in seconds.
-    """
-
-    RATE = 16000
-
-    def __init__(self):
-        # voice activity detection model
-
-        self.clients = {}
-        self.websockets = {}
-        self.clients_start_time = {}
-        self.max_clients = 4
-        self.max_connection_time = 600
-
-    def get_wait_time(self):
-        """
-        Calculate and return the estimated wait time for clients.
-
-        Returns:
-            float: The estimated wait time in minutes.
-        """
-        wait_time = None
-
-        for k, v in self.clients_start_time.items():
-            current_client_time_remaining = self.max_connection_time - (time.time() - v)
-
-            if wait_time is None or current_client_time_remaining < wait_time:
-                wait_time = current_client_time_remaining
-
-        return wait_time / 60
-
-    def recv_audio(self, websocket):
-        """
-        Receive audio chunks from a client in an infinite loop.
-        
-        Continuously receives audio frames from a connected client
-        over a WebSocket connection. It processes the audio frames using a
-        voice activity detection (VAD) model to determine if they contain speech
-        or not. If the audio frame contains speech, it is added to the client's
-        audio data for ASR.
-        If the maximum number of clients is reached, the method sends a
-        "WAIT" status to the client, indicating that they should wait
-        until a slot is available.
-        If a client's connection exceeds the maximum allowed time, it will
-        be disconnected, and the client's resources will be cleaned up.
-
-        Args:
-            websocket (WebSocket): The WebSocket connection for the client.
-        
-        Raises:
-            Exception: If there is an error during the audio frame processing.
-        """
-        logging.info("New client connected")
-        options = websocket.recv()
-        options = json.loads(options)
-
-        if len(self.clients) >= self.max_clients:
-            logging.warning("Client Queue Full. Asking client to wait ...")
-            wait_time = self.get_wait_time()
-            response = {
-                "uid": options["uid"],
-                "status": "WAIT",
-                "message": wait_time,
-            }
-            websocket.send(json.dumps(response))
-            websocket.close()
-            del websocket
-            return
-
-        client = ServeClient(
-            websocket,
-            multilingual=options["multilingual"],
-            language=options["language"],
-            task=options["task"],
-            client_uid=options["uid"]
-        )
-
-        self.clients[websocket] = client
-        self.clients_start_time[websocket] = time.time()
-
-        while True:
-            try:
-                frame_data = websocket.recv()
-                frame_np = np.frombuffer(frame_data, dtype=np.float32)
-
-                self.clients[websocket].add_frames(frame_np)
-
-                elapsed_time = time.time() - self.clients_start_time[websocket]
-                if elapsed_time >= self.max_connection_time:
-                    self.clients[websocket].disconnect()
-                    logging.warning(f"{self.clients[websocket]} Client disconnected due to overtime.")
-                    self.clients[websocket].cleanup()
-                    self.clients.pop(websocket)
-                    self.clients_start_time.pop(websocket)
-                    websocket.close()
-                    del websocket
-                    break
-
-            except Exception as e:
-                logging.error(e)
-                self.clients[websocket].cleanup()
-                self.clients.pop(websocket)
-                self.clients_start_time.pop(websocket)
-                logging.info("Connection Closed.")
-                logging.info(self.clients)
-                del websocket
-                break
-
-    def run(self, host, port=9090):
-        """
-        Run the transcription server.
-
-        Args:
-            host (str): The host address to bind the server.
-            port (int): The port number to bind the server.
-        """
-        with serve(self.recv_audio, host, port) as server:
-            server.serve_forever()
 
 
 class ServeClient:
@@ -181,7 +44,16 @@ class ServeClient:
     SERVER_READY = "SERVER_READY"
     DISCONNECT = "DISCONNECT"
 
-    def __init__(self, websocket, task="transcribe", device=None, multilingual=False, language=None, client_uid=None):
+    def __init__(self,
+                 websocket,
+                 task="transcribe",
+                 device=None,
+                 multilingual=False,
+                 language=None,
+                 client_uid=None,
+                 transcription_queue=None,
+                 llm_queue=None,
+                 transcriber=None, ):
         """
         Initialize a ServeClient instance.
         The Whisper model is initialized based on the client's language and device availability.
@@ -197,19 +69,16 @@ class ServeClient:
             client_uid (str, optional): A unique identifier for the client. Defaults to None.
 
         """
+        if transcriber is None:
+            raise ValueError("Transcriber is None.")
+        self.transcriber = transcriber
         self.client_uid = client_uid
+        self.transcription_queue = transcription_queue
+        self.llm_queue = llm_queue
         self.data = b""
         self.frames = b""
         self.language = language if multilingual else "en"
         self.task = task
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.transcriber = WhisperModel(
-            "/home/ccran/fasterwhisper/faster-whisper-large-v3",
-            # "small" if multilingual else "small.en",
-            device=device,
-            compute_type="int8" if device == "cpu" else "float16",
-            local_files_only=False,
-        )
 
         self.timestamp_offset = 0.0
         self.frames_np = None
@@ -231,6 +100,8 @@ class ServeClient:
 
         # threading
         self.websocket = websocket
+        self.lock = threading.Lock()
+        self.eos = False
         self.trans_thread = threading.Thread(target=self.speech_to_text)
         self.trans_thread.start()
         self.websocket.send(
@@ -241,6 +112,11 @@ class ServeClient:
                 }
             )
         )
+
+    def set_eos(self, eos):
+        self.lock.acquire()
+        self.eos = eos
+        self.lock.release()
 
     def fill_output(self, output):
         """
@@ -287,6 +163,7 @@ class ServeClient:
             frame_np (numpy.ndarray): The audio frame data as a NumPy array.
 
         """
+        self.lock.acquire()
         if self.frames_np is not None and self.frames_np.shape[0] > 45 * self.RATE:
             self.frames_offset += 30.0
             self.frames_np = self.frames_np[int(30 * self.RATE):]
@@ -294,6 +171,7 @@ class ServeClient:
             self.frames_np = frame_np.copy()
         else:
             self.frames_np = np.concatenate((self.frames_np, frame_np), axis=0)
+        self.lock.release()
 
     def speech_to_text(self):
         """
@@ -318,6 +196,7 @@ class ServeClient:
                 break
 
             if self.frames_np is None:
+                time.sleep(0.02)  # wait for any audio to arrive
                 continue
 
             # clip audio if the current chunk exceeds 30 seconds, this basically implies that
@@ -340,8 +219,8 @@ class ServeClient:
                     initial_prompt=None,
                     language=self.language,
                     task=self.task,
-                    vad_filter=True,
-                    vad_parameters={"threshold": 0.5}
+                    vad_filter=False,
+                    # vad_parameters={"threshold": 0.5}
                 )
 
                 result = list(result)

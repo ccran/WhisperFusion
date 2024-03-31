@@ -9,9 +9,10 @@ import onnxruntime
 
 class VoiceActivityDetection():
 
-    def __init__(self, force_onnx_cpu=True):
-        print("downloading ONNX model...")
-        path = self.download()
+    def __init__(self, path=None, force_onnx_cpu=True):
+        if path is None:
+            print("downloading ONNX model...")
+            path = self.download()
         print("loading session")
 
         opts = onnxruntime.SessionOptions()
@@ -38,7 +39,7 @@ class VoiceActivityDetection():
 
         if sr != 16000 and (sr % 16000 == 0):
             step = sr // 16000
-            x = x[:,::step]
+            x = x[:, ::step]
             sr = 16000
 
         if sr not in self.sample_rates:
@@ -90,7 +91,7 @@ class VoiceActivityDetection():
 
         self.reset_states(x.shape[0])
         for i in range(0, x.shape[1], num_samples):
-            wavs_batch = x[:, i:i+num_samples]
+            wavs_batch = x[:, i:i + num_samples]
             out_chunk = self.__call__(wavs_batch, sr)
             outs.append(out_chunk)
 
