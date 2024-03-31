@@ -383,4 +383,3 @@ class ServeClient:
         """
         logging.info("Cleaning up.")
         self.exit = True
-        self.transcriber.destroy()
