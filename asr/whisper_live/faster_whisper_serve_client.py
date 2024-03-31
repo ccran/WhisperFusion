@@ -222,9 +222,9 @@ class ServeClient:
                     vad_filter=False,
                     # vad_parameters={"threshold": 0.5}
                 )
-
                 result = list(result)
 
+                # 语言检测
                 if self.language is None:
                     if info.language_probability > 0.5:
                         self.language = info.language
@@ -236,6 +236,8 @@ class ServeClient:
                         # detect language again
                         continue
 
+                # 结果处理
+                logging.info(f"detect result: {result}")
                 if len(result):
                     self.t_start = None
                     last_segment = self.update_segments(result, duration)
@@ -254,24 +256,23 @@ class ServeClient:
                             segments = self.transcript
                         else:
                             segments = self.transcript[-self.send_last_n_segments:]
-
                     # add a blank if there is no speech for 3 seconds
                     if len(self.text) and self.text[-1] != '':
                         if time.time() - self.t_start > self.add_pause_thresh:
                             self.text.append('')
-
+                # 发送结果
                 try:
                     self.websocket.send(
                         json.dumps({
                             "uid": self.client_uid,
-                            "segments": segments
+                            "segments": segments,
+                            "eos": self.eos
                         })
                     )
                 except Exception as e:
                     logging.error(f"[ERROR]: {e}")
 
             except Exception as e:
-
                 import traceback
                 traceback.print_exc()
                 logging.error(f"[ERROR]: {e}")

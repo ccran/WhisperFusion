@@ -232,4 +232,5 @@ class FasterWhisperServer:
                 host,
                 port
         ) as server:
+            logging.info("start server...")
             server.serve_forever()

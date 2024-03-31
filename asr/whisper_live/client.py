@@ -1,3 +1,7 @@
+import logging
+
+logging.basicConfig(format='%(asctime)s %(filename)s %(lineno)d %(levelname)s %(message)s',
+                    datefmt='%a %d %b %Y %H:%M:%S', level=logging.INFO)
 import os
 import wave
 
@@ -50,7 +54,7 @@ class Client:
     INSTANCES = {}
 
     def __init__(
-        self, host=None, port=None, is_multilingual=False, lang=None, translate=False, model_size="small"
+            self, host=None, port=None, is_multilingual=False, lang=None, translate=False, model_size="small"
     ):
         """
         Initializes a Client instance for audio recording and streaming to a server.
@@ -154,6 +158,7 @@ class Client:
         self.last_response_recieved = time.time()
         message = json.loads(message)
 
+        logging.info("Received message: %s", message)
         if self.uid != message.get("uid"):
             print("[ERROR]: invalid client uid")
             return
@@ -189,7 +194,6 @@ class Client:
             print("LLM output: ")
             for item in message["llm_output"]:
                 print(item)
-
 
         if "segments" not in message.keys():
             return
@@ -247,7 +251,7 @@ class Client:
                 }
             )
         )
-    
+
     def on_open_tts(self):
         pass
 
@@ -262,7 +266,7 @@ class Client:
 
     def on_close_tts(self, ws, close_status_code, close_msg):
         print(f"[INFO]: Websocket connection closed: {close_status_code}: {close_msg}")
-    
+
     @staticmethod
     def bytes_to_float_array(audio_bytes):
         """
@@ -307,7 +311,7 @@ class Client:
         Args:
             filename (str): The path to the audio file to be played and sent to the server.
         """
-        
+
         # read audio and create pyaudio stream
         with wave.open(filename, "rb") as wavfile:
             self.stream = self.p.open(
@@ -424,7 +428,6 @@ class Client:
                 process.kill()
 
         print("[INFO]: HLS stream processing finished.")
-
 
     def record(self, out_file="output_recording.wav"):
         """
@@ -543,6 +546,7 @@ class TranscriptionClient:
         transcription_client()
         ```
     """
+
     def __init__(self, host, port, is_multilingual=False, lang=None, translate=False, model_size="small"):
         self.client = Client(host, port, is_multilingual, lang, translate, model_size)
 
